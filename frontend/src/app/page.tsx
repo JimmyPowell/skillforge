@@ -1,19 +1,26 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { fetchSkills, fetchTasks, fetchRuns } from "@/lib/api";
-import { formatRelativeTime, formatDuration } from "@/lib/utils";
+import {
+  fetchSkills,
+  fetchTasks,
+  fetchRuns,
+  fetchDashboardAnalytics,
+} from "@/lib/api";
+import { formatRelativeTime } from "@/lib/utils";
 import { Activity, BookOpen, ClipboardList, TrendingUp } from "lucide-react";
 import type { Run } from "@/lib/api";
 
 function StatCard({
   label,
   value,
+  subtitle,
   icon: Icon,
   color,
 }: {
   label: string;
   value: string | number;
+  subtitle?: string;
   icon: React.ComponentType<{ className?: string }>;
   color: string;
 }) {
@@ -23,6 +30,9 @@ function StatCard({
         <div>
           <p className="text-sm font-medium text-slate-500">{label}</p>
           <p className="text-2xl font-bold text-slate-900 mt-1">{value}</p>
+          {subtitle && (
+            <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>
+          )}
         </div>
         <div className={`p-3 rounded-lg ${color}`}>
           <Icon className="w-5 h-5 text-white" />
@@ -33,7 +43,8 @@ function StatCard({
 }
 
 function StatusBadge({ run }: { run: Run }) {
-  let className = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ";
+  let className =
+    "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ";
   if (run.status === "pending") {
     className += "bg-slate-100 text-slate-700";
   } else if (run.status === "building" || run.status === "running") {
@@ -83,6 +94,11 @@ function LoadingSkeleton() {
 }
 
 export default function DashboardPage() {
+  const { data: dashboard, isLoading: dashboardLoading } = useQuery({
+    queryKey: ["analytics-dashboard"],
+    queryFn: fetchDashboardAnalytics,
+  });
+
   const { data: skills, isLoading: skillsLoading } = useQuery({
     queryKey: ["skills"],
     queryFn: fetchSkills,
@@ -98,20 +114,14 @@ export default function DashboardPage() {
     queryFn: () => fetchRuns({ limit: 20 }),
   });
 
-  const isLoading = skillsLoading || tasksLoading || runsLoading;
+  const isLoading = skillsLoading || tasksLoading || runsLoading || dashboardLoading;
 
   if (isLoading) return <LoadingSkeleton />;
 
-  const totalSkills = skills?.length ?? 0;
-  const totalTasks = tasks?.length ?? 0;
-  const totalRuns = runs?.length ?? 0;
-
-  const completedRuns = runs?.filter((r) => r.status === "completed") ?? [];
-  const passedRuns = completedRuns.filter((r) => r.passed);
-  const passRate =
-    completedRuns.length > 0
-      ? Math.round((passedRuns.length / completedRuns.length) * 100)
-      : 0;
+  const totalSkills = dashboard?.total_skills ?? skills?.length ?? 0;
+  const totalTasks = dashboard?.total_tasks ?? tasks?.length ?? 0;
+  const totalRuns = dashboard?.total_runs ?? runs?.length ?? 0;
+  const passRate = dashboard?.pass_rate ?? 0;
 
   return (
     <div className="space-y-6">
@@ -138,12 +148,13 @@ export default function DashboardPage() {
         <StatCard
           label="Total Runs"
           value={totalRuns}
+          subtitle={`${Math.round(passRate)}% pass rate`}
           icon={Activity}
           color="bg-amber-500"
         />
         <StatCard
           label="Pass Rate"
-          value={`${passRate}%`}
+          value={`${Math.round(passRate)}%`}
           icon={TrendingUp}
           color="bg-green-500"
         />

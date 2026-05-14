@@ -1,9 +1,10 @@
 """Skills API endpoints."""
 
+import difflib
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -231,6 +232,95 @@ def _extract_headers(content: str) -> list[str]:
         for line in content.split("\n")
         if line.startswith("#") and not line.startswith("---")
     ]
+
+
+@router.get("/{skill_id}/versions/{version_id}/content")
+async def get_version_content(
+    skill_id: str, version_id: str, db: AsyncSession = Depends(get_db)
+):
+    """Return the full content of a specific skill version."""
+    result = await db.execute(
+        select(SkillVersion).where(
+            SkillVersion.id == version_id, SkillVersion.skill_id == skill_id
+        )
+    )
+    version = result.scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    return {
+        "skill_id": skill_id,
+        "version_id": version.id,
+        "version_number": version.version_number,
+        "content": version.content,
+        "word_count": version.word_count,
+        "section_headers": version.section_headers,
+        "change_note": version.change_note,
+        "created_at": version.created_at,
+    }
+
+
+@router.get("/{skill_id}/diff")
+async def diff_versions(
+    skill_id: str,
+    v1: int = Query(..., description="First version number"),
+    v2: int = Query(..., description="Second version number"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a unified diff between two versions of a skill."""
+    # Verify skill exists
+    skill_result = await db.execute(
+        select(Skill).where(Skill.id == skill_id, Skill.is_deleted.is_(False))
+    )
+    skill = skill_result.scalar_one_or_none()
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    # Fetch both versions
+    v1_result = await db.execute(
+        select(SkillVersion).where(
+            SkillVersion.skill_id == skill_id, SkillVersion.version_number == v1
+        )
+    )
+    v2_result = await db.execute(
+        select(SkillVersion).where(
+            SkillVersion.skill_id == skill_id, SkillVersion.version_number == v2
+        )
+    )
+
+    version_1 = v1_result.scalar_one_or_none()
+    version_2 = v2_result.scalar_one_or_none()
+
+    if not version_1:
+        raise HTTPException(status_code=404, detail=f"Version {v1} not found")
+    if not version_2:
+        raise HTTPException(status_code=404, detail=f"Version {v2} not found")
+
+    # Compute unified diff
+    lines_1 = version_1.content.splitlines(keepends=True)
+    lines_2 = version_2.content.splitlines(keepends=True)
+
+    diff_lines = list(
+        difflib.unified_diff(lines_1, lines_2, fromfile=f"v{v1}", tofile=f"v{v2}")
+    )
+    diff_text = "".join(diff_lines)
+
+    # Compute stats
+    additions = sum(1 for l in diff_lines if l.startswith("+") and not l.startswith("+++"))
+    deletions = sum(1 for l in diff_lines if l.startswith("-") and not l.startswith("---"))
+    changes = min(additions, deletions)
+
+    return {
+        "skill_name": skill.name,
+        "v1": {"version": v1, "word_count": version_1.word_count},
+        "v2": {"version": v2, "word_count": version_2.word_count},
+        "diff": diff_text,
+        "stats": {
+            "additions": additions,
+            "deletions": deletions,
+            "changes": changes,
+        },
+    }
 
 
 def _parse_yaml_frontmatter(content: str) -> dict[str, str]:

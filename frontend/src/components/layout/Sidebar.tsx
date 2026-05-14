@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Play,
   BarChart3,
+  GitCompare,
   Zap,
 } from "lucide-react";
 
@@ -16,6 +17,7 @@ const navItems = [
   { label: "Skills", href: "/skills", icon: BookOpen },
   { label: "Tasks", href: "/tasks", icon: ClipboardList },
   { label: "Runs", href: "/runs", icon: Play },
+  { label: "Compare", href: "/compare", icon: GitCompare },
   { label: "Analytics", href: "/analytics", icon: BarChart3 },
 ];
 

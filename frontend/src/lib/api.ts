@@ -196,6 +196,120 @@ export async function createRun(data: CreateRunData): Promise<Run> {
   });
 }
 
+// Analytics Types
+
+export interface DashboardAnalytics {
+  total_skills: number;
+  total_tasks: number;
+  total_runs: number;
+  pass_rate: number;
+  skill_read_rate: number;
+  recent_runs: Run[];
+}
+
+export interface SkillTrendPoint {
+  version: number;
+  pass_rate: number;
+  total_runs: number;
+}
+
+export interface SkillTrends {
+  skill_id: string;
+  skill_name: string;
+  trends: SkillTrendPoint[];
+}
+
+export interface RunComparisonSide {
+  run_id: string;
+  task_name: string;
+  skill_name: string;
+  skill_version: number;
+  reward: number | null;
+  passed: boolean | null;
+  duration_seconds: number | null;
+  tool_calls: number;
+  token_usage: number;
+  skill_read: boolean;
+}
+
+export interface RunComparison {
+  run_a: RunComparisonSide;
+  run_b: RunComparisonSide;
+}
+
+export interface TokenSummaryItem {
+  name: string;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
+export interface TokenSummary {
+  group_by: string;
+  items: TokenSummaryItem[];
+}
+
+export interface SkillDiff {
+  skill_id: string;
+  v1: number;
+  v2: number;
+  diff: string;
+  additions: number;
+  deletions: number;
+}
+
+// Analytics API
+
+export async function fetchDashboardAnalytics(): Promise<DashboardAnalytics> {
+  return fetchJSON<DashboardAnalytics>("/analytics/dashboard");
+}
+
+export async function fetchSkillTrends(skillId: string): Promise<SkillTrends> {
+  return fetchJSON<SkillTrends>(`/analytics/skill/${skillId}/trends`);
+}
+
+export async function fetchRunComparison(
+  runAId: string,
+  runBId: string
+): Promise<RunComparison> {
+  return fetchJSON<RunComparison>(
+    `/analytics/comparison?run_a=${runAId}&run_b=${runBId}`
+  );
+}
+
+export async function fetchTokenSummary(
+  groupBy: string
+): Promise<TokenSummary> {
+  return fetchJSON<TokenSummary>(
+    `/analytics/token-summary?group_by=${groupBy}`
+  );
+}
+
+export async function fetchSkillDiff(
+  skillId: string,
+  v1: number,
+  v2: number
+): Promise<SkillDiff> {
+  return fetchJSON<SkillDiff>(`/skills/${skillId}/diff?v1=${v1}&v2=${v2}`);
+}
+
+export async function fetchVersionContent(
+  skillId: string,
+  versionId: string
+): Promise<string> {
+  const res = await fetch(
+    `${API_BASE}/skills/${skillId}/versions/${versionId}/content`,
+    {
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+  if (!res.ok) {
+    const error = await res.text();
+    throw new Error(`API Error ${res.status}: ${error}`);
+  }
+  return res.text();
+}
+
 // Trajectory
 
 export interface TrajectoryEvent {
