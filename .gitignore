@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+*.egg
+
+# Node.js
+node_modules/
+.next/
+out/
+bun.lockb
+
+# Database
+*.db
+*.sqlite3
+
+# Environment
+.env
+.env.local
+.env.*.local
+.envrc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SkillForge data
+data/runs/
+data/skills/
+data/tasks/
+
+# Logs
+*.log
+logs/
+
+# Docker
+docker-compose.override.yml
