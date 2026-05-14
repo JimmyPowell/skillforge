@@ -1,4 +1,7 @@
-const API_BASE = "http://localhost:8000/api";
+const API_BASE =
+  typeof window !== "undefined"
+    ? `http://${window.location.hostname}:8000/api`
+    : "http://localhost:8000/api";
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {

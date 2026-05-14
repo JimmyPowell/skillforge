@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     anthropic_custom_headers: str = ""
 
     # Frontend
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001", "http://21.6.253.10:3001"]
 
     model_config = {"env_prefix": "SKILLFORGE_", "env_file": ".env", "extra": "ignore"}
 
