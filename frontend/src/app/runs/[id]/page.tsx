@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useCallback, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchRun, fetchTrajectory, fetchSkillUsage } from "@/lib/api";
 import type { Run } from "@/lib/api";
+import { useRunStatus } from "@/lib/websocket";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Clock, Cpu, FileText, Target, List, Sparkles } from "lucide-react";
 import Link from "next/link";
@@ -11,6 +12,90 @@ import { formatRelativeTime, formatDuration } from "@/lib/utils";
 import TrajectoryTimeline from "@/components/trajectory/TrajectoryTimeline";
 import TrajectoryPlayer from "@/components/trajectory/TrajectoryPlayer";
 import SkillUsageCard from "@/components/trajectory/SkillUsageCard";
+
+const PROGRESS_PHASES = ["pending", "building", "running", "verifying", "completed"];
+
+function ProgressBar({ currentPhase }: { currentPhase: string }) {
+  const currentIndex = PROGRESS_PHASES.indexOf(currentPhase);
+
+  return (
+    <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-4">
+      <div className="flex items-center justify-between mb-2">
+        {PROGRESS_PHASES.map((phase, index) => (
+          <div key={phase} className="flex flex-col items-center flex-1">
+            <div
+              className={`w-3 h-3 rounded-full mb-1 ${
+                index < currentIndex
+                  ? "bg-blue-600"
+                  : index === currentIndex
+                  ? "bg-blue-600 animate-pulse"
+                  : "bg-slate-200"
+              }`}
+            />
+            <span
+              className={`text-xs capitalize ${
+                index <= currentIndex
+                  ? "text-blue-600 font-medium"
+                  : "text-slate-400"
+              }`}
+            >
+              {phase}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-0.5 mt-2">
+        {PROGRESS_PHASES.map((phase, index) => (
+          <div
+            key={phase}
+            className={`h-1.5 flex-1 rounded-full ${
+              index < currentIndex
+                ? "bg-blue-600"
+                : index === currentIndex
+                ? "bg-blue-400 animate-pulse"
+                : "bg-slate-200"
+            }`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WebSocketIndicator({
+  isConnected,
+  phase,
+  message,
+}: {
+  isConnected: boolean;
+  phase: string;
+  message: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <span className="relative flex h-2.5 w-2.5">
+        {isConnected && (
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+        )}
+        <span
+          className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+            isConnected ? "bg-green-500" : "bg-slate-400"
+          }`}
+        />
+      </span>
+      <span className="text-slate-600">
+        {isConnected ? (
+          <>
+            <span className="font-medium capitalize">{phase || "connected"}</span>
+            {message && <span className="text-slate-400 ml-1">— {message}</span>}
+          </>
+        ) : (
+          <span className="text-slate-400">Disconnected</span>
+        )}
+      </span>
+    </div>
+  );
+}
 
 function StatusBadge({ run }: { run: Run }) {
   let classes = "";
@@ -77,6 +162,7 @@ type Tab = "trajectory" | "skill-usage";
 export default function RunDetailPage() {
   const params = useParams();
   const id = params.id as string;
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>("trajectory");
   const [currentStep, setCurrentStep] = useState(0);
 
@@ -84,6 +170,29 @@ export default function RunDetailPage() {
     queryKey: ["run", id],
     queryFn: () => fetchRun(id),
   });
+
+  const isInProgress =
+    run?.status === "pending" ||
+    run?.status === "building" ||
+    run?.status === "running";
+
+  // Connect WebSocket only when run is in progress
+  const { phase, message, isConnected } = useRunStatus(
+    isInProgress ? id : null
+  );
+
+  // Determine the current phase - use websocket phase if available, otherwise use run status
+  const currentPhase = phase || run?.status || "pending";
+
+  // Auto-refresh when WebSocket reports completion
+  useEffect(() => {
+    if (phase === "completed" || phase === "failed") {
+      // Invalidate the run query to refresh data
+      queryClient.invalidateQueries({ queryKey: ["run", id] });
+      queryClient.invalidateQueries({ queryKey: ["trajectory", id] });
+      queryClient.invalidateQueries({ queryKey: ["skill-usage", id] });
+    }
+  }, [phase, id, queryClient]);
 
   const { data: trajectory, isLoading: trajectoryLoading } = useQuery({
     queryKey: ["trajectory", id],
@@ -141,6 +250,18 @@ export default function RunDetailPage() {
         </div>
         <StatusBadge run={run} />
       </div>
+
+      {/* Live Status: WebSocket indicator + Progress Bar */}
+      {isInProgress && (
+        <div className="space-y-3">
+          <WebSocketIndicator
+            isConnected={isConnected}
+            phase={currentPhase}
+            message={message}
+          />
+          <ProgressBar currentPhase={currentPhase} />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white rounded-lg border border-slate-200 shadow-sm p-4">

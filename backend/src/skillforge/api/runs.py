@@ -1,14 +1,151 @@
 """Runs API endpoints."""
 
+import itertools
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from skillforge.database import get_db
+from skillforge.engine.agents import get_agent, get_supported_models, list_agents
 from skillforge.models.run import Run, SkillUsageEvent, TokenUsage
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Agent endpoints (must be defined BEFORE /{run_id} to avoid path conflicts)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/agents")
+async def list_agents_endpoint():
+    """List all supported agents and their configurations."""
+    return [agent.to_dict() for agent in list_agents()]
+
+
+@router.get("/agents/{name}/models")
+async def get_agent_models(name: str):
+    """Get supported models for a specific agent."""
+    agent = get_agent(name)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    return get_supported_models(name)
+
+
+# ---------------------------------------------------------------------------
+# Batch run endpoints (must be defined BEFORE /{run_id} to avoid path conflicts)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/batch", status_code=202)
+async def create_batch_run(data: dict, request: Request, db: AsyncSession = Depends(get_db)):
+    """Create a batch of evaluation runs from a matrix of parameters.
+
+    Body:
+        task_ids: list of task IDs
+        skill_version_ids: list of skill version IDs (null = baseline)
+        agents: list of agent names
+        models: list of model identifiers
+        config: optional shared config (timeout_sec, env_vars, etc.)
+
+    Creates one Run per combination in the cartesian product:
+        task_ids x skill_version_ids x agents x models
+    """
+    task_ids = data.get("task_ids", [])
+    skill_version_ids = data.get("skill_version_ids", [])
+    agents = data.get("agents", ["claude-code"])
+    models = data.get("models", ["claude-sonnet-4-6"])
+    config = data.get("config", {})
+
+    if not task_ids:
+        raise HTTPException(status_code=400, detail="task_ids is required and must be non-empty")
+    if not skill_version_ids:
+        # Default to a single baseline run (no skill)
+        skill_version_ids = [None]
+
+    batch_id = str(uuid.uuid4())
+    run_ids: list[str] = []
+    orchestrator = request.app.state.orchestrator
+
+    # Create runs for every combination in the matrix
+    for task_id, sv_id, agent_name, model in itertools.product(
+        task_ids, skill_version_ids, agents, models
+    ):
+        # Resolve agent to benchflow_agent_id
+        agent_cfg = get_agent(agent_name)
+        agent_value = agent_cfg.benchflow_agent_id if agent_cfg else agent_name
+
+        run = Run(
+            task_id=task_id,
+            skill_version_id=sv_id,
+            agent=agent_value,
+            model=model,
+            config=config,
+            batch_id=batch_id,
+            labels=data.get("labels", []),
+        )
+        db.add(run)
+        await db.flush()
+        run_ids.append(run.id)
+
+    await db.commit()
+
+    # Dispatch all runs
+    for rid in run_ids:
+        await orchestrator.dispatch(rid)
+
+    return {
+        "batch_id": batch_id,
+        "total_runs": len(run_ids),
+        "run_ids": run_ids,
+    }
+
+
+@router.get("/batch/{batch_id}")
+async def get_batch_status(batch_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the status summary for a batch of runs."""
+    result = await db.execute(
+        select(Run).where(Run.batch_id == batch_id).order_by(Run.queued_at)
+    )
+    runs = result.scalars().all()
+
+    if not runs:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    completed = sum(1 for r in runs if r.status == "completed")
+    failed = sum(1 for r in runs if r.status == "failed")
+    pending = sum(1 for r in runs if r.status in ("pending", "building", "running", "verifying", "analyzing"))
+    passed = sum(1 for r in runs if r.passed is True)
+
+    return {
+        "batch_id": batch_id,
+        "total": len(runs),
+        "completed": completed,
+        "passed": passed,
+        "failed": failed,
+        "pending": pending,
+        "runs": [
+            {
+                "id": r.id,
+                "task_id": r.task_id,
+                "skill_version_id": r.skill_version_id,
+                "agent": r.agent,
+                "model": r.model,
+                "status": r.status,
+                "reward": r.reward,
+                "passed": r.passed,
+            }
+            for r in runs
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Run CRUD endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.get("")

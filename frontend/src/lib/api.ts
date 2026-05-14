@@ -338,3 +338,61 @@ export async function fetchTrajectory(runId: string): Promise<TrajectoryEvent[]>
 export async function fetchSkillUsage(runId: string): Promise<SkillUsageAnalysis> {
   return fetchJSON<SkillUsageAnalysis>(`/runs/${runId}/skill-usage`);
 }
+
+// Agent types
+
+export interface AgentInfo {
+  name: string;
+  display_name: string;
+  supported_models: string[];
+  required_env: string[];
+}
+
+// Batch types
+
+export interface BatchRunRequest {
+  task_ids: string[];
+  skill_version_ids: (string | null)[];
+  agents: string[];
+  models: string[];
+  config?: Record<string, unknown>;
+}
+
+export interface BatchRunResponse {
+  batch_id: string;
+  total_runs: number;
+  run_ids: string[];
+}
+
+export interface BatchStatus {
+  batch_id: string;
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  runs: Run[];
+}
+
+// Agents
+
+export async function fetchAgents(): Promise<AgentInfo[]> {
+  return fetchJSON<AgentInfo[]>("/agents");
+}
+
+export async function fetchAgentModels(agentName: string): Promise<string[]> {
+  return fetchJSON<string[]>(`/agents/${agentName}/models`);
+}
+
+// Batch Runs
+
+export async function createBatchRun(data: BatchRunRequest): Promise<BatchRunResponse> {
+  return fetchJSON<BatchRunResponse>("/runs/batch", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function fetchBatchStatus(batchId: string): Promise<BatchStatus> {
+  return fetchJSON<BatchStatus>(`/runs/batch/${batchId}`);
+}

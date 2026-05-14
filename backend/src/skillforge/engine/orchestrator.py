@@ -108,6 +108,7 @@ class Orchestrator:
         task = task_result.scalar_one_or_none()
         if not task or not task.disk_path:
             await self._update_run_status(db, run_id, DBRunStatus.FAILED, error="Task not found or has no disk_path")
+            self._notify(run_id, StatusUpdate(phase=RunPhase.FAILED, message="Task not found or has no disk_path"))
             return
 
         # Load skill version (optional)
@@ -122,10 +123,11 @@ class Orchestrator:
                 if skill_version:
                     skills_dir = await self._prepare_skills_dir(task, skill_version)
 
-        # Update status to BUILDING
+        # --- Phase: BUILDING ---
         await self._update_run_status(db, run_id, DBRunStatus.BUILDING)
         run.started_at = datetime.now()
         await db.commit()
+        self._notify(run_id, StatusUpdate(phase=RunPhase.BUILDING, message="Preparing evaluation environment..."))
 
         # Build execution config
         config = RunConfig(
@@ -137,15 +139,20 @@ class Orchestrator:
             env_vars=run.config.get("env_vars", {}),
         )
 
-        # Status callback
+        # Status callback — emits granular phase transitions to watchers
         def on_status(update: StatusUpdate):
             db_status = _PHASE_TO_DB_STATUS.get(update.phase)
             if db_status:
-                # We can't await inside a sync callback, so just notify watchers
                 self._notify(run_id, update)
+
+        # --- Phase: RUNNING ---
+        self._notify(run_id, StatusUpdate(phase=RunPhase.RUNNING, message="Agent executing task..."))
 
         # Execute!
         exec_result = await self.backend.execute(config, on_status=on_status)
+
+        # --- Phase: VERIFYING ---
+        self._notify(run_id, StatusUpdate(phase=RunPhase.VERIFYING, message="Checking results..."))
 
         # Update run with results
         run.reward = exec_result.reward
@@ -167,10 +174,13 @@ class Orchestrator:
 
         await db.commit()
 
+        # --- Phase: ANALYZING ---
+        self._notify(run_id, StatusUpdate(phase=RunPhase.ANALYZING, message="Analyzing trajectory..."))
+
         # Analyze trajectory (non-blocking — errors here don't fail the run)
         await self._analyze_trajectory(db, run, exec_result)
 
-        # Notify completion
+        # --- Final notification ---
         final_phase = RunPhase.FAILED if run.status == DBRunStatus.FAILED.value else RunPhase.COMPLETED
         self._notify(run_id, StatusUpdate(
             phase=final_phase,
