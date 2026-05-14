@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
@@ -14,9 +14,15 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+};
+
 export const metadata: Metadata = {
   title: "SkillForge",
-  description: "AI Skill Development & Benchmarking Platform",
+  description:
+    "AI Skill Development & Benchmarking Platform — develop, evaluate, and iterate on AI skills with automated benchmarking.",
 };
 
 export default function RootLayout({
@@ -32,7 +38,9 @@ export default function RootLayout({
       <body className="min-h-full bg-slate-50 font-sans">
         <Providers>
           <Sidebar />
-          <main className="ml-64 min-h-screen p-8">{children}</main>
+          <main className="min-h-screen p-6 pt-16 lg:pt-8 lg:ml-64 lg:p-8 transition-all duration-300">
+            {children}
+          </main>
         </Providers>
       </body>
     </html>

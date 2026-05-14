@@ -1,18 +1,53 @@
 """Runs API endpoints."""
 
 import itertools
+import time
 import uuid
+from collections import deque
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from skillforge.config import settings
 from skillforge.database import get_db
 from skillforge.engine.agents import get_agent, get_supported_models, list_agents
 from skillforge.models.run import Run, SkillUsageEvent, TokenUsage
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# In-memory rate limiter for run creation
+# ---------------------------------------------------------------------------
+
+
+class _RateLimiter:
+    """Simple sliding-window rate limiter (in-memory, per-process)."""
+
+    def __init__(self, max_requests: int, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._timestamps: deque[float] = deque()
+
+    def is_allowed(self) -> bool:
+        """Check if a new request is allowed. If yes, record it."""
+        now = time.time()
+        cutoff = now - self.window_seconds
+        # Remove expired timestamps
+        while self._timestamps and self._timestamps[0] < cutoff:
+            self._timestamps.popleft()
+        if len(self._timestamps) >= self.max_requests:
+            return False
+        self._timestamps.append(now)
+        return True
+
+
+_run_creation_limiter = _RateLimiter(
+    max_requests=settings.rate_limit_runs_per_minute,
+    window_seconds=60,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +89,11 @@ async def create_batch_run(data: dict, request: Request, db: AsyncSession = Depe
     Creates one Run per combination in the cartesian product:
         task_ids x skill_version_ids x agents x models
     """
+    if not _run_creation_limiter.is_allowed():
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: max {settings.rate_limit_runs_per_minute} run creations per minute",
+        )
     task_ids = data.get("task_ids", [])
     skill_version_ids = data.get("skill_version_ids", [])
     agents = data.get("agents", ["claude-code"])
@@ -186,6 +226,12 @@ async def list_runs(
 @router.post("", status_code=202)
 async def create_run(data: dict, request: Request, db: AsyncSession = Depends(get_db)):
     """Trigger a new evaluation run."""
+    if not _run_creation_limiter.is_allowed():
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: max {settings.rate_limit_runs_per_minute} run creations per minute",
+        )
+
     run = Run(
         task_id=data["task_id"],
         skill_version_id=data.get("skill_version_id"),

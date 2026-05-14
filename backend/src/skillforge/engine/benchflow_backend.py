@@ -10,6 +10,7 @@ ExecutionBackend interface — no changes to orchestrator or API needed.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -65,6 +66,62 @@ class BenchFlowBackend(ExecutionBackend):
         self.docker_use_sg = docker_use_sg
         self.jobs_dir = jobs_dir
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        # Image cache: task_name → dockerfile content hash
+        self._image_cache: dict[str, str] = {}
+
+    def _compute_dockerfile_hash(self, task_path: str) -> str | None:
+        """Compute SHA256 hash of the task's Dockerfile."""
+        dockerfile = Path(task_path) / "Dockerfile"
+        if not dockerfile.exists():
+            # Also check environment/Dockerfile
+            dockerfile = Path(task_path) / "environment" / "Dockerfile"
+        if not dockerfile.exists():
+            return None
+        content = dockerfile.read_bytes()
+        return hashlib.sha256(content).hexdigest()
+
+    def _image_exists(self, task_name: str) -> bool:
+        """Check if a Docker image with the expected tag exists."""
+        tag = f"skillforge-{task_name}:latest"
+        try:
+            if self.docker_use_sg:
+                result = subprocess.run(
+                    ["sg", "docker", "-c", f"docker image inspect {tag}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+            else:
+                result = subprocess.run(
+                    ["docker", "image", "inspect", tag],
+                    capture_output=True, text=True, timeout=10,
+                )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _should_skip_build(self, task_path: str) -> bool:
+        """Check if we can skip the Docker build (image cached and Dockerfile unchanged)."""
+        task_name = Path(task_path).name
+        current_hash = self._compute_dockerfile_hash(task_path)
+        if current_hash is None:
+            return False
+
+        cached_hash = self._image_cache.get(task_name)
+        if cached_hash == current_hash and self._image_exists(task_name):
+            logger.info("Docker image cache hit for task %s — skipping build", task_name)
+            return True
+        return False
+
+    def _update_cache(self, task_path: str) -> None:
+        """Update the image cache after a successful build."""
+        task_name = Path(task_path).name
+        current_hash = self._compute_dockerfile_hash(task_path)
+        if current_hash:
+            self._image_cache[task_name] = current_hash
+
+    def clear_cache(self) -> None:
+        """Clear the Docker image cache, forcing rebuilds on next run."""
+        self._image_cache.clear()
+        logger.info("Docker image cache cleared")
 
     async def execute(
         self,
@@ -78,7 +135,11 @@ class BenchFlowBackend(ExecutionBackend):
         2. Docker operations may need `sg docker -c` wrapping
         3. Isolation — a stuck run doesn't block the FastAPI event loop
         """
-        _emit(on_status, RunPhase.BUILDING, "Preparing evaluation environment...")
+        # Check image cache — skip build if possible
+        if self._should_skip_build(config.task_path):
+            _emit(on_status, RunPhase.BUILDING, "Using cached Docker image (no changes detected)")
+        else:
+            _emit(on_status, RunPhase.BUILDING, "Preparing evaluation environment...")
 
         # Build the command
         cmd_parts = self._build_command(config)
@@ -115,6 +176,9 @@ class BenchFlowBackend(ExecutionBackend):
                 )
 
             _emit(on_status, RunPhase.VERIFYING, "Checking results...")
+
+            # Update image cache on successful execution
+            self._update_cache(config.task_path)
 
             return self._parse_output(stdout_str, stderr_str, config)
 

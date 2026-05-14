@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     max_concurrent_runs: int = 2
     default_timeout_sec: int = 600
 
+    # Rate limiting
+    rate_limit_runs_per_minute: int = 10
+
     # Agent credentials (passed to containers)
     anthropic_base_url: str = ""
     anthropic_auth_token: str = ""

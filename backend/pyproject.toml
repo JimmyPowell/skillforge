@@ -15,11 +15,15 @@ dependencies = [
     "python-multipart>=0.0.12",
     "websockets>=14.0",
     "httpx>=0.28.0",
+    "typer>=0.25.1",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.scripts]
+skillforge = "skillforge.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skillforge"]

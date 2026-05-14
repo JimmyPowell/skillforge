@@ -41,6 +41,17 @@ _PHASE_TO_DB_STATUS = {
     RunPhase.CANCELLED: DBRunStatus.CANCELLED,
 }
 
+# Errors that are considered transient and worth retrying
+_TRANSIENT_ERRORS = (
+    "Docker build timeout",
+    "docker build",
+    "connection error",
+    "ACP connection",
+    "connection refused",
+    "timeout",
+    "ECONNRESET",
+)
+
 
 class Orchestrator:
     """Coordinates evaluation runs between the database and execution backend."""
@@ -56,6 +67,38 @@ class Orchestrator:
         self.max_concurrent = max_concurrent
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._status_watchers: dict[str, list[asyncio.Queue]] = {}
+
+    async def recover_stale_runs(self) -> int:
+        """Recover runs stuck in active states (called on startup).
+
+        Scans for runs in 'building', 'running', or 'verifying' status
+        and marks them as failed (they were interrupted by a restart).
+
+        Returns the number of recovered runs.
+        """
+        recovered = 0
+        stale_statuses = [
+            DBRunStatus.BUILDING.value,
+            DBRunStatus.RUNNING.value,
+            DBRunStatus.VERIFYING.value,
+        ]
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(Run).where(Run.status.in_(stale_statuses))
+            )
+            stale_runs = result.scalars().all()
+            for run in stale_runs:
+                run.status = DBRunStatus.FAILED.value
+                run.error = "interrupted by restart"
+                run.completed_at = datetime.now()
+                recovered += 1
+            if recovered:
+                await db.commit()
+                logger.warning(
+                    "Recovered %d stale runs (marked as failed: interrupted by restart)",
+                    recovered,
+                )
+        return recovered
 
     def subscribe(self, run_id: str) -> asyncio.Queue:
         """Subscribe to real-time status updates for a run."""
@@ -81,18 +124,42 @@ class Orchestrator:
         asyncio.create_task(self._execute_run(run_id))
 
     async def _execute_run(self, run_id: str) -> None:
-        """Execute a single run with concurrency control."""
+        """Execute a single run with concurrency control and retry on transient errors."""
         async with self._semaphore:
             async with self.session_factory() as db:
                 try:
                     await self._do_execute(run_id, db)
                 except Exception as e:
+                    error_str = str(e)
+                    # Check if this is a transient error worth retrying
+                    if self._is_transient_error(error_str):
+                        logger.warning(
+                            "Transient error in run %s, retrying once: %s", run_id, error_str
+                        )
+                        try:
+                            await self._do_execute(run_id, db)
+                            return
+                        except Exception as retry_e:
+                            logger.exception("Retry also failed for run %s", run_id)
+                            await self._update_run_status(
+                                db, run_id,
+                                status=DBRunStatus.FAILED,
+                                error=f"Orchestrator error (after retry): {retry_e}",
+                            )
+                            return
+
                     logger.exception("Unhandled error in run %s", run_id)
                     await self._update_run_status(
                         db, run_id,
                         status=DBRunStatus.FAILED,
                         error=f"Orchestrator error: {e}",
                     )
+
+    @staticmethod
+    def _is_transient_error(error: str) -> bool:
+        """Check if an error is transient and worth retrying."""
+        error_lower = error.lower()
+        return any(pattern.lower() in error_lower for pattern in _TRANSIENT_ERRORS)
 
     async def _do_execute(self, run_id: str, db: AsyncSession) -> None:
         """Core execution logic."""
