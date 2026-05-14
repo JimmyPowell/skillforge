@@ -219,8 +219,14 @@ class BenchFlowBackend(ExecutionBackend):
 
     def _build_command(self, config: RunConfig) -> list[str]:
         """Build the shell command to invoke BenchFlow."""
+        # Find the skillsbench project root (where pyproject.toml lives)
+        # by walking up from the task path
+        task_path = Path(config.task_path)
+        project_root = task_path.parent.parent  # tasks/<name> -> tasks/ -> skillsbench/
+
         # We call `uv run bench run` which is the BenchFlow CLI
         bench_cmd = (
+            f"cd {project_root} && "
             f"uv run bench run {config.task_path}"
             f" --agent {config.agent}"
             f" --model {config.model}"

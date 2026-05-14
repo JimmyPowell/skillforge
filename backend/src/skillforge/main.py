@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from skillforge.config import settings
 from skillforge.database import async_session_factory, engine
-from skillforge.engine.benchflow_backend import BenchFlowBackend
+from skillforge.engine.custom_docker_backend import CustomDockerBackend
 from skillforge.engine.orchestrator import Orchestrator
 from skillforge.models import Base
 
@@ -35,9 +35,9 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
 
     # Initialize execution engine
-    backend = BenchFlowBackend(
+    backend = CustomDockerBackend(
         docker_use_sg=settings.docker_use_sg,
-        jobs_dir=str(settings.data_dir / "jobs"),
+        artifacts_dir=str(settings.runs_dir),
     )
     orchestrator = Orchestrator(
         backend=backend,
